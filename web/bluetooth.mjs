@@ -1,4 +1,5 @@
 import { MANUFACTURER_ID } from './pics.mjs';
+import { t } from './i18n.mjs';
 
 // Kept separate from the UI so permission prompts and cancellation can be tested.
 export class AdvertisementScanner {
@@ -117,25 +118,18 @@ export class DeviceAdvertisementWatcher extends AdvertisementScanner {
 }
 
 export function scanErrorMessage(error) {
-  const messages = {
-    NotAllowedError: 'スキャンが許可されませんでした。ブラウザとOSのBluetooth権限を確認して、再度開始してください。',
-    NotFoundError: 'スキャン要求がキャンセルされたか、Bluetoothアダプターが見つかりません。',
-    NotSupportedError: 'このブラウザ・OSではアドバタイズのスキャンを利用できません。動作環境・使い方を確認してください。',
-    SecurityError: 'スキャンがセキュリティ設定で制限されています。HTTPSまたはlocalhostで直接ページを開き、サイトのBluetooth権限を確認してください。',
-    InvalidStateError: 'スキャンを開始できない状態です。Bluetoothの電源、OSのChromeへのBluetooth権限、ページが表示中かを確認してください。',
-    AbortError: 'スキャンが中断されました。再度開始してください。',
-  };
-  let message = messages[error?.name];
+  const known = ['NotAllowedError', 'NotFoundError', 'NotSupportedError', 'SecurityError', 'InvalidStateError', 'AbortError'];
+  let message = known.includes(error?.name) ? t(`error.${error.name}`) : null;
   // Chromium also uses PROMPT_CANCELED for an unavailable prompt UI or a
   // concurrent scan request. The message does not prove the user canceled it.
   // Do not misdiagnose either as a powered-off Bluetooth adapter.
   if (error?.name === 'InvalidStateError') {
     if (/user cancel(?:l)?ed the permission prompt/i.test(error.message ?? '')) {
-      message = 'スキャン許可を完了できませんでした。ダイアログのキャンセル、Chrome側のダイアログ表示失敗、スキャン要求の重複が考えられます。ダイアログが表示されない場合は、Chromeを完全終了して開き直し、通常のタブで再度試してください。';
+      message = t('error.promptCanceled');
     } else if (/document is not active/i.test(error.message ?? '')) {
-      message = 'ページがアクティブでないためスキャンを開始できません。このタブを表示した状態で「スキャン開始」を押してください。';
+      message = t('error.notActive');
     }
   }
   const details = [error?.name, error?.message].filter(Boolean).join(': ') || String(error);
-  return `${message ?? 'スキャンを開始できませんでした。'}\nブラウザ詳細: ${details}`;
+  return `${message ?? t('error.generic')}\n${t('error.details', { details })}`;
 }

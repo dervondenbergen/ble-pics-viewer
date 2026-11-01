@@ -1,4 +1,5 @@
 import { MANUFACTURER_ID, hexDump } from './pics.mjs';
+import { t } from './i18n.mjs';
 
 // Records real advertisement events only. PICS decoding is independent of this log.
 export class AdvertisementDiagnostics {
@@ -22,7 +23,7 @@ export class AdvertisementDiagnostics {
     const entry = {
       timestamp,
       deviceId: event.device?.id || null,
-      name: event.name || event.device?.name || '名称なし',
+      name: event.name || event.device?.name || t('debug.noName'),
       rssi: Number.isFinite(event.rssi) ? event.rssi : null,
       txPower: Number.isFinite(event.txPower) ? event.txPower : null,
       uuids: Array.from(event.uuids ?? []),

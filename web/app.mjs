@@ -1,17 +1,46 @@
 import {
-  MANUFACTURER_ID, STALE_AFTER_MS, SIGNAL_LABELS, processPics, hexDump,
+  MANUFACTURER_ID, STALE_AFTER_MS, signalLabel, processPics, hexDump,
   updateIntersection, recentHistory, demoPackets,
 } from './pics.mjs';
-import { AdvertisementScanner, DeviceAdvertisementWatcher, scanErrorMessage } from './bluetooth.mjs?v=20261101-1';
+import { AdvertisementScanner, DeviceAdvertisementWatcher, scanErrorMessage } from './bluetooth.mjs?v=20261101-2';
+import { LANGUAGES, DEFAULT_LANGUAGE, t, setLanguage, getLanguage, locale, matchLanguage } from './i18n.mjs';
 import { AdvertisementDiagnostics } from './debug.mjs';
 
 const $ = id => document.getElementById(id);
 const intersections = new Map();
 const diagnostics = new AdvertisementDiagnostics();
-const timeFormat = new Intl.DateTimeFormat('ja-JP', {
+const LANGUAGE_STORAGE_KEY = 'pics-viewer-language';
+const makeTimeFormat = () => new Intl.DateTimeFormat(locale(), {
   hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3,
   hourCycle: 'h23',
 });
+let timeFormat = makeTimeFormat();
+
+// Priority: ?lang= parameter, saved choice, browser languages, Japanese.
+function initialLanguage() {
+  const requested = new URLSearchParams(window.location.search).get('lang');
+  if (requested && Object.hasOwn(LANGUAGES, requested)) return requested;
+  try {
+    const saved = window.localStorage.getItem(LANGUAGE_STORAGE_KEY);
+    if (saved && Object.hasOwn(LANGUAGES, saved)) return saved;
+  } catch {
+    // Storage may be unavailable (private mode, blocked site data).
+  }
+  return matchLanguage(navigator.languages ?? [navigator.language]) ?? DEFAULT_LANGUAGE;
+}
+setLanguage(initialLanguage());
+
+// Static texts live in index.html with data-i18n attributes. HTML variants
+// only contain fixed markup from i18n.mjs, never received data.
+function translatePage() {
+  document.documentElement.lang = getLanguage();
+  for (const element of document.querySelectorAll('[data-i18n]')) element.textContent = t(element.dataset.i18n);
+  for (const element of document.querySelectorAll('[data-i18n-html]')) element.innerHTML = t(element.dataset.i18nHtml);
+  for (const element of document.querySelectorAll('[data-i18n-aria]')) element.setAttribute('aria-label', t(element.dataset.i18nAria));
+  for (const element of document.querySelectorAll('[data-i18n-content]')) element.setAttribute('content', t(element.dataset.i18nContent));
+  $('language').value = getLanguage();
+}
+translatePage();
 const scanSupported = window.isSecureContext && typeof navigator.bluetooth?.requestLEScan === 'function';
 const watchSupported = window.isSecureContext && typeof navigator.bluetooth?.requestDevice === 'function'
   && typeof window.BluetoothDevice?.prototype.watchAdvertisements === 'function';
@@ -31,33 +60,41 @@ let invalidCount = 0;
 let demoTimer = null;
 let demoStep = 0;
 let demoData = false;
+let lastInvalidMessage = '';
 
 const signalCards = Array.from({ length: 6 }, (_, index) => {
   const card = document.createElement('article');
   card.className = 'signal';
   // Only fixed markup is used here. All received values are assigned via textContent.
-  card.innerHTML = `<h3 class="signal-heading">信号${index + 1}${index < 2 ? [' · 東西', ' · 南北'][index] : ''}</h3><div class="signal-body"><span class="lamp" aria-hidden="true"></span><div><span class="signal-state">未受信</span><p class="remaining">残り値 —</p></div></div>`;
+  card.innerHTML = '<h3 class="signal-heading"></h3><div class="signal-body"><span class="lamp" aria-hidden="true"></span><div><span class="signal-state"></span><p class="remaining"></p></div></div>';
   $('signals').append(card);
   return {
     card,
+    heading: card.querySelector('.signal-heading'),
     state: card.querySelector('.signal-state'),
     remaining: card.querySelector('.remaining'),
   };
 });
 
+function renderSignalHeadings() {
+  for (const [index, { heading }] of signalCards.entries()) {
+    const direction = index < 2 ? ` · ${t(['monitor.eastWest', 'monitor.northSouth'][index])}` : '';
+    heading.textContent = `${t('monitor.signal', { n: index + 1 })}${direction}`;
+  }
+}
+renderSignalHeadings();
+
 function updateCompatibility() {
   const api = watchingDevice() ? 'requestDevice / watchAdvertisements' : 'requestLEScan';
   $('watch-notice').hidden = !watchingDevice();
   $('watch-target-control').hidden = !watchingDevice();
-  $('watch-notice').textContent = picsOnly()
-    ? '選択一覧をメーカーID 0x01CEのPICS候補に絞ります。名称が不明でも候補として選択できます。選択後に交差点ID・信号情報が表示されることを確認してください。同じメーカーIDの別機器も候補になる場合があります。監視するのは選んだ1台だけで、GATT接続は行いません。'
-    : '選択した1台だけを監視します。GATT接続は行いません。デバッグでは名前やRSSIで受信確認でき、メーカー生データは許可を要求したPICSの0x01CEのみ表示できます。デバイス一覧の表示だけでは、広告の受信確認にはなりません。';
+  $('watch-notice').textContent = t(picsOnly() ? 'watch.notice.pics' : 'watch.notice.all');
   if (!window.isSecureContext) {
-    $('compatibility').textContent = '実機受信にはHTTPSまたはhttp://localhostが必要です。現在の環境ではデモを利用できます。';
+    $('compatibility').textContent = t('compat.insecure');
   } else if (!supported()) {
-    $('compatibility').textContent = `この環境では選択した受信方式（${api}）を利用できません。対応するChromeで実験的機能を有効にしてください。詳しくは下の「動作環境・使い方」を確認してください。デモは利用できます。`;
+    $('compatibility').textContent = t('compat.unsupported', { api });
   } else {
-    $('compatibility').textContent = `${api}を検出しました。実際の受信可否はOS・Bluetoothアダプター・権限に依存します。開始操作後にブラウザの許可・選択画面で操作してください。`;
+    $('compatibility').textContent = t('compat.detected', { api });
   }
 }
 updateCompatibility();
@@ -65,19 +102,24 @@ updateCompatibility();
 function setMode(next) {
   mode = next;
   $('mode').dataset.mode = mode;
-  $('mode').textContent = { idle: '停止中', requesting: '許可待ち', scanning: watchingDevice() ? '広告監視中' : 'スキャン中', demo: 'デモ' }[mode];
-  $('start').textContent = watchingDevice() ? 'デバイスを選んで監視' : 'スキャン開始';
+  const method = watchingDevice() ? 'watch' : 'scan';
+  $('mode').textContent = t(mode === 'scanning' ? `mode.scanning.${method}` : `mode.${mode}`);
+  $('start').textContent = t(`controls.start.${method}`);
   $('start').disabled = !supported() || mode === 'scanning' || mode === 'requesting';
   $('reception-method').disabled = mode !== 'idle';
   $('watch-target').disabled = mode !== 'idle';
   $('demo').disabled = mode === 'demo' || mode === 'requesting';
   $('stop').disabled = mode === 'idle';
   $('status').textContent = {
-    idle: '停止中です。表示は最後に受信したデータです。',
-    requesting: watchingDevice() ? `${picsOnly() ? 'PICS候補（メーカーID 0x01CE）' : 'すべてのデバイス'}からの選択・広告監視の開始を待っています…` : 'ブラウザのスキャン許可を待っています…',
-    scanning: watchingDevice() ? `選択したデバイス「${receiver().device?.name || '名称なし'}」の広告を監視中です。GATT接続は行いません。` : 'BLEスキャン実行中です。受信したメーカーID 0x01CE のデータを解析します。',
-    demo: '架空の交差点データを1秒ごとに更新しています。',
-  }[mode];
+    idle: () => t('status.idle'),
+    requesting: () => (watchingDevice()
+      ? t('status.requesting.watch', { target: t(picsOnly() ? 'status.requesting.targetPics' : 'status.requesting.targetAll') })
+      : t('status.requesting.scan')),
+    scanning: () => (watchingDevice()
+      ? t('status.scanning.watch', { name: receiver().device?.name || t('debug.noName') })
+      : t('status.scanning.scan')),
+    demo: () => t('status.demo'),
+  }[mode]();
   render();
 }
 
@@ -130,7 +172,8 @@ function receive(raw, metadata) {
     render();
   } catch (error) {
     invalidCount++;
-    $('invalid-count').textContent = `不正パケット: ${invalidCount}（最新: ${error.message}）`;
+    lastInvalidMessage = error.message;
+    $('invalid-count').textContent = t('packet.invalidLatest', { count: invalidCount, message: error.message });
   }
 }
 
@@ -144,7 +187,7 @@ function updateOptions() {
   if (!options.length) {
     const placeholder = document.createElement('option');
     placeholder.value = '';
-    placeholder.textContent = '受信待ち';
+    placeholder.textContent = t('monitor.waiting');
     options.push(placeholder);
   }
   $('intersection').replaceChildren(...options);
@@ -166,27 +209,33 @@ function render() {
   $('signals').classList.toggle('is-stale', Boolean(stale));
   $('freshness').classList.toggle('stale', Boolean(stale));
   $('freshness').textContent = hasSignals
-    ? `${stale ? (running ? '更新なし' : '停止中 · 最終受信値') : '信号データ受信中'} · 最終信号受信 ${timeFormat.format(entry.signalTimestamp)} · ${Math.max(0, Math.floor((now - entry.signalTimestamp) / 1000))}秒前`
-    : 'Type 2（信号状態）の受信待ち';
+    ? t('freshness.line', {
+      state: t(stale ? (running ? 'freshness.noUpdates' : 'freshness.stopped') : 'freshness.live'),
+      time: timeFormat.format(entry.signalTimestamp),
+      age: Math.max(0, Math.floor((now - entry.signalTimestamp) / 1000)),
+    })
+    : t('monitor.waitingType2');
 
   for (const [index, { card, state, remaining }] of signalCards.entries()) {
     const signal = entry?.pedestrian_signals?.[index];
     card.dataset.state = signal?.signal_state ?? '';
-    state.textContent = signal ? SIGNAL_LABELS[signal.signal_state] : '未受信';
-    remaining.textContent = `残り値 ${formatRemaining(signal)}`;
+    state.textContent = signal ? signalLabel(signal.signal_state) : t('monitor.notReceived');
+    remaining.textContent = t('monitor.remaining', { value: formatRemaining(signal) });
   }
   $('intersection-name').textContent = entry
-    ? (entry.identifier || entry.deviceName || `交差点 ${selectedId}`)
-    : '交差点の情報を待っています';
+    ? (entry.identifier || entry.deviceName || t('monitor.intersectionFallback', { id: selectedId }))
+    : t('monitor.waitingInfo');
   $('coordinates').textContent = entry?.latitude != null && entry?.longitude != null
-    ? `${entry.latitude.toFixed(6)}, ${entry.longitude.toFixed(6)}` : '位置情報 未受信';
+    ? `${entry.latitude.toFixed(6)}, ${entry.longitude.toFixed(6)}` : t('monitor.noPosition');
   $('received-at').textContent = entry ? timeFormat.format(entry.timestamp) : '—';
   $('message-type').textContent = entry ? `Type ${entry.latest.message_type} / ID ${entry.latest.message_id}` : '—';
   $('rssi').textContent = entry?.rssi != null ? `${entry.rssi} dBm` : '—';
   $('packet-count').textContent = String(packetCount);
-  $('raw').textContent = entry ? hexDump(entry.raw) : 'パケット未受信';
+  $('raw').textContent = entry ? hexDump(entry.raw) : t('packet.none');
   $('parsed').textContent = entry ? JSON.stringify(entry.latest, null, 2) : '{}';
-  if (!invalidCount) $('invalid-count').textContent = '不正パケット: 0';
+  $('invalid-count').textContent = invalidCount
+    ? t('packet.invalidLatest', { count: invalidCount, message: lastInvalidMessage })
+    : t('packet.invalid', { count: 0 });
   renderHistory(entry, now);
   renderDebug(now);
 }
@@ -200,24 +249,24 @@ function renderDebug(now = Date.now()) {
   $('debug-devices').textContent = String(devices.size);
   $('debug-pics-count').textContent = String(picsCount);
   const age = lastTimestamp == null ? null : Math.max(0, Math.floor((now - lastTimestamp) / 1000));
-  $('debug-last').textContent = lastTimestamp == null ? '—' : `${timeFormat.format(lastTimestamp)} · ${age}秒前`;
+  $('debug-last').textContent = lastTimestamp == null ? '—' : `${timeFormat.format(lastTimestamp)} · ${t('time.secondsAgo', { age })}`;
   let status;
   if (mode === 'demo') {
-    status = 'デモ表示中です。Bluetoothのスキャンは実行していません。実機の受信確認には「スキャン開始」を押してください。';
+    status = t('debug.status.demo');
   } else if (!supported()) {
-    status = '選択した受信方式のAPIを利用できません。上の動作環境の案内を確認してください。';
+    status = t('debug.status.unsupported');
   } else if (mode === 'requesting') {
-    status = watchingDevice() ? 'デバイス選択・広告監視の開始待ちです。実際の広告はまだ受信していません。' : 'スキャン許可待ちです。スキャン開始はまだ確認できていません。';
+    status = t(watchingDevice() ? 'debug.status.requesting.watch' : 'debug.status.requesting.scan');
   } else if (mode === 'scanning' && count === 0) {
-    status = watchingDevice() ? '広告監視開始済み · 選択したデバイスの広告はまだ受信していません。デバイスの選択成功と広告の受信成功は別です。送信を続けている機器で確認してください。' : 'スキャン開始済み · 受信待ちです。実際のBLE受信はまだ確認できていません。周囲のBLE機器のアドバタイズ送信、OSとブラウザの権限を確認してください。';
+    status = t(watchingDevice() ? 'debug.status.waiting.watch' : 'debug.status.waiting.scan');
   } else if (mode === 'scanning') {
     status = age < 5
-      ? 'BLEアドバタイズの受信を確認できました。PICS信号機がなくてもスキャン・受信できています。'
-      : `このセッションでBLE受信を確認済みです。直近${age}秒は受信がありません。`;
+      ? t('debug.status.received')
+      : t('debug.status.quiet', { age });
   } else {
     status = count
-      ? '停止中 · 以下は実際に受信したログです。現在はスキャンしていません。'
-      : '停止中 · 「スキャン開始」を押して周囲のBLEアドバタイズを確認してください。';
+      ? t('debug.status.stoppedWithLog')
+      : t('debug.status.stoppedEmpty');
   }
   $('debug-status').textContent = status;
   $('debug-status').dataset.received = String(mode === 'scanning' && count > 0 && age < 5);
@@ -226,7 +275,7 @@ function renderDebug(now = Date.now()) {
     const values = [
       timeFormat.format(device.timestamp), device.name,
       device.rssi == null ? '—' : `${device.rssi} dBm`,
-      device.manufacturerData.map(data => data.companyIdentifier).join(', ') || 'なし',
+      device.manufacturerData.map(data => data.companyIdentifier).join(', ') || t('debug.none'),
       String(device.count),
     ];
     values.forEach((value, index) => {
@@ -247,22 +296,22 @@ function renderDebug(now = Date.now()) {
     const cell = document.createElement('td');
     cell.colSpan = 5;
     cell.className = 'empty';
-    cell.textContent = count ? 'デバイスIDを含むイベントは未受信です。詳細ログを確認してください。' : 'BLEアドバタイズ未受信';
+    cell.textContent = t(count ? 'debug.noDeviceIdEvents' : 'debug.noBle');
     row.append(cell);
     rows.push(row);
   }
   $('debug-device-list').replaceChildren(...rows);
   $('debug-log').textContent = events.length
     ? JSON.stringify(events.slice().reverse().map(event => ({ ...event, receivedAt: timeFormat.format(event.timestamp) })), null, 2)
-    : 'アドバタイズ未受信';
+    : t('debug.noAdvertisements');
 }
 
 function renderHistory(entry, now) {
   const entries = recentHistory(entry?.history ?? [], now).reverse();
   const rows = entries.map(item => {
     const row = document.createElement('tr');
-    const values = [timeFormat.format(item.timestamp), ...item.signals.slice(0, 2).map(signal => SIGNAL_LABELS[signal.signal_state])];
-    while (values.length < 3) values.push('未受信');
+    const values = [timeFormat.format(item.timestamp), ...item.signals.slice(0, 2).map(signal => signalLabel(signal.signal_state))];
+    while (values.length < 3) values.push(t('monitor.notReceived'));
     values.push(`${formatRemaining(item.signals[0])} / ${formatRemaining(item.signals[1])}`);
     values.forEach((value, index) => {
       const cell = document.createElement('td');
@@ -280,7 +329,7 @@ function renderHistory(entry, now) {
     const cell = document.createElement('td');
     cell.colSpan = 4;
     cell.className = 'empty';
-    cell.textContent = '直近30秒の信号受信履歴はありません';
+    cell.textContent = t('history.emptyRecent');
     row.append(cell);
     rows.push(row);
   }
@@ -313,7 +362,7 @@ $('demo').addEventListener('click', () => {
   demoStep = 0;
   setMode('demo');
   const tick = () => {
-    for (const packet of demoPackets(demoStep++)) receive(packet, { deviceName: 'デモ交差点', rssi: null });
+    for (const packet of demoPackets(demoStep++)) receive(packet, { deviceName: t('demo.deviceName'), rssi: null });
   };
   tick();
   demoTimer = setInterval(tick, 1000);
@@ -330,7 +379,7 @@ $('debug-enabled').addEventListener('change', () => {
   diagnostics.clear();
   // Remove rendered data as well when disabling diagnostics.
   $('debug-device-list').replaceChildren();
-  $('debug-log').textContent = 'アドバタイズ未受信';
+  $('debug-log').textContent = t('debug.noAdvertisements');
   renderDebug();
 });
 $('debug-clear').addEventListener('click', () => {
@@ -342,14 +391,30 @@ $('intersection').addEventListener('change', event => {
   render();
 });
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden && mode !== 'idle') stopReception('ページが非表示になったため停止しました。再開するにはスキャン開始、またはデモを押してください。');
+  if (document.hidden && mode !== 'idle') stopReception(t('status.hidden'));
 });
 window.addEventListener('pagehide', () => stopReception());
 setInterval(() => {
   if (mode === 'scanning' && receiver().scan && !receiver().scan.active) {
-    stopReception('ブラウザが受信を停止しました。再開するには開始ボタンを押してください。');
+    stopReception(t('status.browserStopped'));
   }
   render();
 }, 1000);
+$('language').addEventListener('change', event => {
+  setLanguage(event.target.value);
+  try {
+    window.localStorage.setItem(LANGUAGE_STORAGE_KEY, getLanguage());
+  } catch {
+    // The choice still applies to this page view.
+  }
+  timeFormat = makeTimeFormat();
+  // Status messages from events (errors, stop reasons) are not re-rendered,
+  // so the current mode message is regenerated in the new language.
+  translatePage();
+  renderSignalHeadings();
+  updateCompatibility();
+  setMode(mode);
+  if (mode === 'idle' && !packetCount && !demoData) $('status').textContent = t('status.initial');
+});
 setMode('idle');
-$('status').textContent = 'スキャン開始、またはデモを選んでください。';
+$('status').textContent = t('status.initial');

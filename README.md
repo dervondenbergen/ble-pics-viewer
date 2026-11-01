@@ -1,5 +1,7 @@
 # ble-pics-viewer
 
+**日本語** | [English](README.en.md) | [Deutsch](README.de.md)
+
 このプログラムは、交差点の信号制御機から発信される **高度化PICS (Pedestrian Information and Communication System)** のBLEアドバタイズを受信して可視化するツールです。  BLEスキャンにより受信した信号状態（赤／青／点滅青など）をリアルタイムで表示します。
 
 ## 高度化PICS（歩行者等支援情報通信システム）とは
@@ -29,7 +31,7 @@ https://github.com/user-attachments/assets/71077409-656c-471e-b071-970c37c89461
 
 公開URL: [Web Bluetooth版を開く](https://yumu19.github.io/ble-pics-viewer/web/)
 
-`web`ディレクトリに、ブラウザで動く版を用意しています。追加のライブラリやビルドは不要です。
+`web`ディレクトリに、ブラウザで動く版を用意しています。追加のライブラリやビルドは不要です。画面は日本語・英語・ドイツ語に対応しています（右上の言語選択）。
 
 ```bash
 python3 -m http.server 8000 --bind 127.0.0.1 --directory web
