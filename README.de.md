@@ -29,7 +29,7 @@ https://github.com/user-attachments/assets/71077409-656c-471e-b071-970c37c89461
 
 ## Web-Bluetooth-Version
 
-Öffentliche URL: [Web-Bluetooth-Version öffnen](https://yumu19.github.io/ble-pics-viewer/web/)
+Öffentliche URL: [Web-Bluetooth-Version öffnen](https://dervondenbergen.github.io/ble-pics-viewer/web/)
 
 Im Verzeichnis `web` gibt es eine Version, die im Browser läuft. Zusätzliche Bibliotheken oder ein Build-Schritt sind nicht nötig. Die Oberfläche ist auf Japanisch, Englisch und Deutsch verfügbar (Sprachauswahl oben rechts).
 

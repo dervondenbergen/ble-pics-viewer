@@ -29,7 +29,7 @@ https://github.com/user-attachments/assets/71077409-656c-471e-b071-970c37c89461
 
 ## Web Bluetooth version
 
-Public URL: [Open the Web Bluetooth version](https://yumu19.github.io/ble-pics-viewer/web/)
+Public URL: [Open the Web Bluetooth version](https://dervondenbergen.github.io/ble-pics-viewer/web/)
 
 The `web` directory contains a version that runs in the browser. No additional libraries or build steps are required. The user interface is available in Japanese, English and German (language picker at the top right).
 
