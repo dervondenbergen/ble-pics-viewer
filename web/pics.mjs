@@ -1,20 +1,22 @@
+import { t } from './i18n.mjs';
+
 // Manufacturer-specific payload only: the company identifier (CE 01) is not included.
 export const MANUFACTURER_ID = 0x01ce;
 export const HISTORY_WINDOW_MS = 30_000;
 export const STALE_AFTER_MS = 5_000;
 
 const SIGNAL_STATES = ['NoSignal', 'Red', 'BlinkGreen', 'Green', 'None'];
-export const SIGNAL_LABELS = {
-  NoSignal: '信号なし', Red: '赤', BlinkGreen: '青点滅', Green: '青',
-  None: '対象なし', Unknown: '不明',
-};
+// Localised label for a decoded signal state (see i18n.mjs).
+export function signalLabel(state) {
+  return t(`signal.${state ?? 'Unknown'}`);
+}
 
 export function toBytes(data) {
   if (ArrayBuffer.isView(data)) {
     return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
   }
   if (data instanceof ArrayBuffer) return new Uint8Array(data);
-  throw new TypeError('パケットにはArrayBufferまたはTypedArrayを指定してください。');
+  throw new TypeError(t('pics.invalidData'));
 }
 
 export function hexDump(data) {
@@ -24,11 +26,11 @@ export function hexDump(data) {
 // Byte offsets and signal encodings follow process_pics() in ble-pics-viewer.py.
 export function processPics(data) {
   const bytes = toBytes(data);
-  if (bytes.length < 10) throw new RangeError('PICSヘッダーが短すぎます（10バイト以上必要）。');
+  if (bytes.length < 10) throw new RangeError(t('pics.headerTooShort'));
   const type = bytes[2];
   const minimumLength = { 0: 24, 1: 18, 2: 11 }[type] ?? 10;
   if (bytes.length < minimumLength) {
-    throw new RangeError(`Type ${type}のパケットが短すぎます（${minimumLength}バイト以上必要）。`);
+    throw new RangeError(t('pics.typeTooShort', { type, length: minimumLength }));
   }
   const info = {
     message_type: type,
